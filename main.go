@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -20,28 +21,78 @@ const (
 	CLOUDFLARE        = "https://api.cloudflare.com/client/v4/zones/"
 )
 
+type DnsRecordsResponse struct {
+	Result []DnsRecordResponseEntry `json:"result"`
+}
+
+type DnsRecordResponseEntry struct {
+	Id        string `json:"id"`
+	ZoneId    string `json:"zone_id"`
+	ZoneName  string `json:"zone_name"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	Proxiable bool   `json:"proxiable"`
+	Proxied   bool   `json:"proxied"`
+	Ttl       int    `json:"ttl"`
+	Locked    bool   `json:"locked"`
+	Meta      struct {
+		AutoAdded           bool   `json:"auto_added"`
+		ManagedByApps       bool   `json:"managed_by_apps"`
+		ManagedByArgoTunnel bool   `json:"managed_by_argo_tunnel"`
+		Source              string `json:"source"`
+	} `json:"meta"`
+	CreatedOn  time.Time `json:"created_on"`
+	ModifiedOn time.Time `json:"modified_on"`
+}
+
+type DnsRecord struct {
+	Id      string `json:"id"`
+	ZoneId  string `json:"zone_id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+func CreateDnsRecordFrom(entry DnsRecordResponseEntry) *DnsRecord {
+	return &DnsRecord{
+		Id:      entry.Id,
+		ZoneId:  entry.ZoneId,
+		Type:    entry.Type,
+		Name:    entry.Name,
+		Content: entry.Content,
+	}
+}
+
 func main() {
-	zoneId := *flag.String("zone", os.Getenv("CLOUDFLARE_ZONE_ID"), "Cloudflare Zone ID")
-	email := *flag.String("email", os.Getenv("CLOUDFLARE_EMAIL"), "Cloudflare email address")
-	key := *flag.String("key", os.Getenv("CLOUDFLARE_AUTH_KEY"), "Cloudflare auth key")
-	dnsNamesToSync := strings.Split(*flag.String("names", os.Getenv("CLOUDFLARE_SYNC_NAMES"), "Comma-separated DNS names to sync"), ",")
+	zoneId := flag.String("zone-id", os.Getenv("CLOUDFLARE_ZONE_ID"), "Cloudflare Zone ID")
+	email := flag.String("email", os.Getenv("CLOUDFLARE_EMAIL"), "Cloudflare email address")
+	key := flag.String("auth-key", os.Getenv("CLOUDFLARE_AUTH_KEY"), "Cloudflare global API key")
+	dnsNamesRawInput := flag.String("names", os.Getenv("CLOUDFLARE_SYNC_NAMES"), "Comma-separated DNS names")
+	flag.Parse()
+
+	if *zoneId == "" || *email == "" || *key == "" || *dnsNamesRawInput == "" {
+		log.Fatal("Missing arguments. Use -h for help")
+	}
+
+	dnsNames := strings.Split(*dnsNamesRawInput, ",")
 
 	ipAddresses, err := getExternalIpAddresses()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Get dns records
-	dnsRecordsResponses, err := getDnsRecords(zoneId, email, key)
+	dnsRecordsResponses, err := getDnsRecords(*zoneId, *email, *key)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	for _, dnsRecordResponse := range dnsRecordsResponses {
 		dnsRecord := CreateDnsRecordFrom(dnsRecordResponse)
 
 		// Filter out names not to update
-		if !contains(dnsNamesToSync, dnsRecord.Name) {
+		if !contains(dnsNames, dnsRecord.Name) {
 			continue
 		}
 
@@ -54,8 +105,8 @@ func main() {
 
 		dnsRecord.Content = ipAddresses[dnsRecord.Type]
 
-		if err := updateDnsRecord(*dnsRecord, email, key); err != nil {
-			panic(err)
+		if err := updateDnsRecord(*dnsRecord, *email, *key); err != nil {
+			log.Fatal(err)
 		}
 	}
 
@@ -87,7 +138,7 @@ func updateDnsRecord(record DnsRecord, email string, key string) error {
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}(response.Body)
 
@@ -163,7 +214,7 @@ func getDnsRecords(zoneId string, email string, key string) ([]DnsRecordResponse
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}(response.Body)
 
